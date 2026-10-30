@@ -25,27 +25,78 @@ M._injection_query = [[
 
 local _predicate_registered = false
 local _patched_parsers = {}
-local _fixing = {} -- per-buffer re-entrancy guard
+local _fixing = {}
+local _cfg = {}
+local COMMENT_PREFIX_NS = vim.api.nvim_create_namespace("jupytext_render_comment_prefix")
+
+local function apply_comment_prefix_highlight(buf, ranges)
+  vim.api.nvim_buf_clear_namespace(buf, COMMENT_PREFIX_NS, 0, -1)
+  for _, range in ipairs(ranges) do
+    local width = range[2] == 1 and 1 or 2
+    vim.api.nvim_buf_set_extmark(buf, COMMENT_PREFIX_NS, range[1], 0, {
+      end_row = range[1],
+      end_col = width,
+      hl_group = "@comment.python",
+      priority = 100,
+    })
+  end
+end
+local _highlight_registered = false
+
+local function register_python_highlight_override()
+  if _highlight_registered then return true end
+  local chunks = {}
+  for _, file in ipairs(vim.treesitter.query.get_files("python", "highlights")) do
+    local handle = io.open(file, "r")
+    if handle then
+      chunks[#chunks + 1] = handle:read("*a")
+      handle:close()
+    end
+  end
+  local source = table.concat(chunks, "\n")
+  local replacement = [[((comment) @comment @spell
+  (#not-is-in-markdown-cell? @comment))]]
+  local updated, count = source:gsub("%(comment%) @comment @spell", replacement, 1)
+  if count == 0 then
+    return false
+  end
+  vim.treesitter.query.set("python", "highlights", updated)
+  _highlight_registered = true
+  return true
+end
+
+local function restart_python_highlighters()
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype == "python" then
+      pcall(vim.treesitter.stop, buf)
+      pcall(vim.treesitter.start, buf, "python")
+    end
+  end
+end
 
 --- Register the custom treesitter predicate `is-in-markdown-cell?`.
 --- Only registers once; safe to call multiple times.
+local function node_in_markdown_cell(match, bufnr, pred)
+  local nodes = match[pred[2]]
+  local node = nodes and nodes[1]
+  if not node then return false end
+  if _cfg.ipynb_only and not vim.api.nvim_buf_get_name(bufnr):match("%.ipynb$") then
+    return false
+  end
+  cells.update_cache(bufnr)
+  return cells.is_line_in_markdown_cell(bufnr, node:start())
+end
+
+--- Register the custom cell predicates used by injection and highlights.
 function M._register_predicate()
   if _predicate_registered then return end
   _predicate_registered = true
 
   vim.treesitter.query.add_predicate("is-in-markdown-cell?", function(match, _, bufnr, pred)
-    local node = match[pred[2]]
-    if not node then return false end
-    -- In Neovim 0.11+ match[id] returns a list of nodes, not a single TSNode
-    if type(node) == "table" then
-      node = node[1]
-      if not node then return false end
-    end
-    -- Lazily ensure cache is populated — any treesitter parse pass
-    -- (including render-markdown re-parses) will have up-to-date data.
-    cells.update_cache(bufnr)
-    local row = node:start()
-    return cells.is_line_in_markdown_cell(bufnr, row)
+    return node_in_markdown_cell(match, bufnr, pred)
+  end, { force = true })
+  vim.treesitter.query.add_predicate("not-is-in-markdown-cell?", function(match, _, bufnr, pred)
+    return not node_in_markdown_cell(match, bufnr, pred)
   end, { force = true })
 end
 
@@ -135,9 +186,13 @@ function M._fix_markdown_regions(buf)
     if not ts_ok or not parser then return end
 
     local md = parser:children()["markdown"]
-    if not md then return end
+    if not md then
+      apply_comment_prefix_highlight(buf, {})
+      return
+    end
 
     local ranges = compute_ranges(buf)
+    apply_comment_prefix_highlight(buf, ranges)
     if #ranges == 0 then return end
 
     -- Fix markdown child regions (bounding-box → per-line)
@@ -207,6 +262,15 @@ end
 function M._cleanup(buf)
   _patched_parsers[buf] = nil
   _fixing[buf] = nil
+  if vim.api.nvim_buf_is_valid(buf) then
+    vim.api.nvim_buf_clear_namespace(buf, COMMENT_PREFIX_NS, 0, -1)
+  end
+end
+
+function M._clear_comment_prefix(buf)
+  if vim.api.nvim_buf_is_valid(buf) then
+    vim.api.nvim_buf_clear_namespace(buf, COMMENT_PREFIX_NS, 0, -1)
+  end
 end
 
 --- Enable render-markdown.nvim on a specific buffer, if available.
@@ -264,9 +328,14 @@ end
 --- render-markdown.nvim will process Python buffers.
 ---@param cfg table
 function M.setup(cfg)
+  _cfg = cfg or {}
   vim.schedule(function()
+    M._register_predicate()
+    local highlight_changed = register_python_highlight_override()
     M._register_injection()
-
+    if highlight_changed then
+      restart_python_highlighters()
+    end
     -- Patch render-markdown state if available (for debug/consistency)
     local state_ok, rm_state = pcall(require, "render-markdown.state")
     if state_ok and rm_state.file_types then

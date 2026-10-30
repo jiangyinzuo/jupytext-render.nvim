@@ -140,20 +140,22 @@ These keymaps work with **molten-nvim** (set up separately):
 ```lua
 require("jupytext-render").setup({
   render_markdown = true,      -- integrate with render-markdown.nvim
+  cell_decorations = false,    -- do not add borders, backgrounds, or conceal extmarks
+  ipynb_only = true,            -- attach only to buffers named *.ipynb
   keymaps = {
     toggle = "<leader>mM",     -- toggle rendering in current buffer
   },
   highlights = {
-    cell_bg = "JupytextMDCell",  -- background hl for markdown cell lines
-    sep     = "JupytextMDSep",   -- color of border lines
+    cell_bg = "JupytextMDCell",  -- used when cell_decorations is true
+    sep     = "JupytextMDSep",   -- used when cell_decorations is true
   },
   border = {
     top    = "── markdown ──────────────────────",
     bottom = "──────────────────────────────────",
   },
-  conceal_marker = true,  -- hide "# %% [markdown]" marker line
+  conceal_marker = true,  -- used when cell_decorations is true
   auto_attach    = true,  -- attach automatically on BufReadPost/FileType
-  debounce_ms    = 150,   -- re-render delay after text changes (ms)
+  debounce_ms    = 150,   -- re-render delay after text changes
 })
 ```
 
@@ -210,13 +212,13 @@ df.head()
 
 This plugin:
 
-1. Scans for `# %%` markers using `vim.api.nvim_buf_get_lines`
-2. For each markdown cell:
-   - Places a virtual-line border above/below
-   - Conceals the `# ` prefix from each comment line (extmarks with `conceal = ""`)
-   - Applies a background highlight group across each line
-3. Registers a treesitter injection that injects `markdown` grammar into those comment nodes (offset by 2 chars to strip `# `)
-4. render-markdown.nvim then processes the injected markdown and renders headings, bold, tables, etc.
+1. Scans for `# %%` markers using `vim.api.nvim_buf_get_lines`.
+2. Registers a Tree-sitter injection that passes only Markdown-cell comment bodies to
+   the `markdown` grammar, offset by two characters to strip `# `.
+3. In `cell_decorations = false` mode, adds no cell borders, backgrounds, conceal
+   extmarks, or custom Markdown extmarks.
+4. Lets `render-markdown.nvim` process the injected Markdown and render headings,
+   bold text, tables, and code blocks.
 
 ---
 

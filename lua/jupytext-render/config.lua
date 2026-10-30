@@ -2,7 +2,9 @@ local M = {}
 
 M.defaults = {
   render_markdown = false,
-  keymaps = {
+  cell_decorations = true,
+  ipynb_only = false,
+	keymaps = {
     toggle    = "<leader>mM",
     next_cell = "]j",
     prev_cell = "[j",

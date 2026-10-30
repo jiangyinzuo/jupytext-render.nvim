@@ -37,7 +37,9 @@ local function debounced_render(buf)
   timer:start(_cfg.debounce_ms, 0, vim.schedule_wrap(function()
     if vim.api.nvim_buf_is_valid(buf) and _state[buf] and _state[buf].enabled then
       cells.update_cache(buf)
-      extmarks.render(buf, _cfg)
+      if _cfg.cell_decorations then
+        extmarks.render(buf, _cfg)
+      end
       if _cfg.render_markdown then
         injections._fix_markdown_regions(buf)
       end
@@ -57,7 +59,7 @@ local function subscribe_text_events(buf)
     buffer   = buf,
     group    = group,
     callback = function()
-      if _state[buf] and _state[buf].enabled then
+      if _state[buf] and _state[buf].enabled and _cfg.cell_decorations then
         extmarks.render(buf, _cfg)
       end
     end,
@@ -67,7 +69,7 @@ local function subscribe_text_events(buf)
     buffer   = buf,
     group    = group,
     callback = function()
-      if _state[buf] and _state[buf].enabled then
+      if _state[buf] and _state[buf].enabled and _cfg.cell_decorations then
         extmarks.render(buf, _cfg)
       end
     end,
@@ -93,10 +95,13 @@ local function try_attach(buf)
   if not vim.api.nvim_buf_is_valid(buf) then return end
   if vim.bo[buf].filetype ~= "python" then return end
   if not cells.is_jupytext(buf) then return end
+  if _cfg.ipynb_only and not vim.api.nvim_buf_get_name(buf):match("%.ipynb$") then return end
   if _state[buf] then return end -- already attached
 
   _state[buf] = { enabled = true, timer = nil }
-  extmarks.render(buf, _cfg)
+  if _cfg.cell_decorations then
+    extmarks.render(buf, _cfg)
+  end
   if _cfg.render_markdown then
     injections.enable_render_markdown(buf)
   end
@@ -110,7 +115,9 @@ function M.enable(buf)
     subscribe_text_events(buf)
   end
   _state[buf].enabled = true
-  extmarks.render(buf, _cfg)
+  if _cfg.cell_decorations then
+    extmarks.render(buf, _cfg)
+  end
   if _cfg.render_markdown then
     injections.enable_render_markdown(buf)
   end
@@ -122,6 +129,7 @@ function M.disable(buf)
   if _state[buf] then _state[buf].enabled = false end
   extmarks.clear(buf)
   if _cfg.render_markdown then
+    injections._clear_comment_prefix(buf)
     injections.disable_render_markdown(buf)
   end
 end
